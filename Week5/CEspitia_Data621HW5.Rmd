@@ -1,0 +1,413 @@
+---
+title: "Data 621"
+author: 'Cesar Espitia HW #5'
+date: "7/15/2018"
+output: html_document
+---
+
+## Abstract
+Purpose of this assignment is to explore, analyze and model a dataset containing approximately 12,000 commercially available wines. The variables are mostly related to the chemical properties of the wine being sold. The response variable(TARGET) is the number of sample cases of wine that were purchased by wine distribution companies after sampling a bottle of wine. These cases would be used to provide tasting samples to restaurants and wine stores around the United States. The more sample cases purchased, the more likely is a bottle of wine to be sold at a high-end restaurant. A large wine manufacturer wants to study the data to predict the number of wine cases that would be ordered based on the wine characteristics.
+
+If the wine manufacturer can predict the number of cases, then that manufacturer will be able to adjust their wine offering to maximize sales. Our objective is to build a count regression model to predict the number of cases of wine that will be sold under given properties of the wine. Sometimes, the fact that a variable is missing is predictive of the target. For building various models, we will be using only the variables that are part of the dataset(or variables that are derived from the variables).
+
+###Keywords:  wine, data621
+
+
+
+## Data Exploration
+
+
+```{r dataexploration}
+knitr::opts_chunk$set(echo = TRUE)
+library(e1071)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(corrplot)
+library(FactoMineR)
+library(VIF)
+library(knitr)
+library(kableExtra)
+library(Hmisc)
+library(pROC)
+library(binr)
+library(MASS)
+library(pscl)
+library(AER)
+
+# read data
+train = read.csv(file="data/wine-training-data.csv")
+dim(train)
+
+
+#transform data
+
+
+#check data
+summary(train) %>% kable() %>% kable_styling()
+
+str(train)
+
+sapply(train, function(x) sum(is.na(x))) %>% kable() %>% kable_styling()
+
+library(UpSetR)
+
+library(naniar)
+
+gg_miss_fct(x = train, fct = TARGET)
+
+train %>%
+  as_shadow_upset() %>%
+  upset(nsets = 24)
+
+
+
+ntrain<-select_if(train, is.numeric)
+ntrain %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") +   # In separate panels
+    geom_density()  
+
+summary_metrics <- function(df){
+  ###Creates summary metrics table
+  metrics_only <- df[, sapply(df, is.numeric)]
+   
+  df_metrics <- psych::describe(metrics_only, quant = c(.25,.75))
+  df_metrics$unique_values = rapply(metrics_only, function(x) length(unique(x)))
+  df_metrics <- 
+    dplyr::select(df_metrics, n, unique_values, min, Q.1st = Q0.25, median, mean, Q.3rd = Q0.75, 
+    max, range, sd, skew, kurtosis
+  )
+  return(df_metrics)
+}
+
+
+metrics_df <- summary_metrics(train)
+
+boxplot_data <- 
+  train %>% 
+  dplyr::select(rownames(metrics_df)[metrics_df$unique_values < 15]) %>% 
+  reshape2::melt(id.vars = "TARGET")
+
+ggplot(data = boxplot_data, aes(x = factor(value), y = TARGET)) +
+  geom_boxplot() +
+  facet_wrap( ~ variable, scales = "free") +
+  coord_flip() +
+  ggthemes::theme_fivethirtyeight()
+
+trainc <- train[complete.cases(train), ]
+trainc <- trainc[, !(colnames(trainc) %in% c("INDEX"))]
+
+rcorr(as.matrix(trainc))
+corrplot(cor(trainc), method="square")
+
+library(VIM)
+library(stringr)
+options(scipen = 999)
+missing_plot <- VIM::aggr(train,  
+                      numbers = T, 
+                      sortVars = T,
+                      col = c("lightgreen", "darkred", "orange"),
+                      labels=names(train), 
+                      ylab=c("Missing Value Counts"
+                             , "Pattern"))
+
+summary(missing_plot)
+
+missing_plot$missings %>% 
+  mutate(
+    pct_missing = Count / nrow(train)
+    ) %>% 
+  arrange(-pct_missing) %>% 
+  filter(pct_missing > 0) %>% 
+  kable(digits = 3, row.names = T, caption = "Variables Missing Values")  
+
+```
+
+## Data Preparation
+
+```{r datapreparation}
+#negative values
+vars_neg_values <- 
+  dplyr::select(train, 
+              intersect(rownames(metrics_df)[metrics_df$unique_values > 15],
+              rownames(metrics_df)[metrics_df$min < 0])
+              )
+
+neg_proportions <- t(apply(vars_neg_values, 2, function(x) prop.table(table(x < 0))))
+
+data.frame(
+  Var = rownames(neg_proportions),
+  is_negative = neg_proportions[, 2]
+) %>% arrange(-is_negative) %>% 
+  kable(digits = 2)
+
+#new variables
+train$BoundSulfurDioxide <- train$TotalSulfurDioxide - train$FreeSulfurDioxide
+
+# impute data for missing values
+# use column mean for calculation
+
+train$STARS[is.na(train$STARS)] <- mean(train$STARS, na.rm=TRUE)
+train$Alcohol[is.na(train$Alcohol)] <- mean(train$Alcohol, na.rm=TRUE)
+train$Sulphates[is.na(train$Sulphates)] <- mean(train$Sulphates, na.rm=TRUE)
+train$pH[is.na(train$pH)] <- mean(train$pH, na.rm=TRUE)
+train$TotalSulfurDioxide[is.na(train$TotalSulfurDioxide)] <- mean(train$TotalSulfurDioxide, na.rm=TRUE)
+train$FreeSulfurDioxide[is.na(train$FreeSulfurDioxide)] <- mean(train$FreeSulfurDioxide, na.rm=TRUE)
+train$BoundSulfurDioxide[is.na(train$BoundSulfurDioxide)] <- mean(train$BoundSulfurDioxide, na.rm=TRUE)
+train$Chlorides[is.na(train$Chlorides)] <- mean(train$Chlorides, na.rm=TRUE)
+train$ResidualSugar[is.na(train$ResidualSugar)] <- mean(train$ResidualSugar, na.rm=TRUE)
+
+#convert to abs for negative values
+#converted to positive based upon literature
+
+train$FixedAcidity <- abs(train$FixedAcidity)
+train$VolatileAcidity <- abs(train$VolatileAcidity)
+train$CitricAcid <- abs(train$CitricAcid)
+train$ResidualSugar <- abs(train$ResidualSugar)
+train$Chlorides <- abs(train$Chlorides)
+train$FreeSulfurDioxide <- abs(train$FreeSulfurDioxide)
+train$TotalSulfurDioxide <- abs(train$TotalSulfurDioxide)
+train$BoundSulfurDioxide <- abs(train$BoundSulfurDioxide)
+train$Sulphates <- abs(train$Sulphates)
+train$Alcohol <- abs(train$Alcohol)
+
+#new variables after abs to avoid nan and inf
+train$PerVol <- train$VolatileAcidity/(train$FixedAcidity+train$VolatileAcidity)
+
+#shift categorigal labelappeal
+train$LabelAppeal <- train$LabelAppeal+2
+
+
+train2<-train
+train2$STARS <- as.factor(train2$STARS)
+
+
+
+train <- train[, !(colnames(train) %in% c("INDEX"))]
+
+
+# 
+# #create variable
+# train$new <- train$tax / (train$medv*10)
+# 
+trainnum <- dplyr::select_if(train, is.numeric)
+
+rcorr(as.matrix(trainnum))
+corrplot(cor(trainnum), method="square")
+
+```
+
+
+
+
+## Build Models Poisson 2
+```{r buildmodelspoisson}
+
+#MODEL 1
+model1 <- glm(TARGET~ FixedAcidity+VolatileAcidity+CitricAcid+ResidualSugar+Chlorides+FreeSulfurDioxide+TotalSulfurDioxide+BoundSulfurDioxide+Density+pH+Sulphates+Alcohol+as.factor(LabelAppeal)+as.factor(AcidIndex) + as.factor(STARS)+PerVol,data=train, family=poisson())
+
+summary(model1)
+predmodel1 <- predict(model1, type="response")
+train2$pred1 <- predict(model1, type="response")
+
+table(true = train$TARGET, pred = floor(fitted(model1))) %>% kable() %>% kable_styling()
+
+
+par(mfrow=c(1,2))
+hist(train2$TARGET)
+hist(train2$pred1)
+
+#plots for Model 1
+par(mfrow=c(2,2))
+plot(model1)
+
+dispersiontest(model1)
+
+#MODEL 2
+
+model2 <- glm(TARGET~ VolatileAcidity+TotalSulfurDioxide+Alcohol+as.factor(LabelAppeal)+as.factor(AcidIndex) + as.factor(STARS)+PerVol,data=train, family=poisson())
+
+summary(model2)
+predmodel2 <- predict(model2, type="response")
+train2$pred2 <- predict(model2, type="response")
+
+table(true = train$TARGET, pred = floor(fitted(model2))) %>% kable() %>% kable_styling()
+
+par(mfrow=c(1,2))
+hist(train2$TARGET)
+hist(train2$pred2)
+
+#plots for Model 1
+par(mfrow=c(2,2))
+plot(model2)
+
+dispersiontest(model2)
+```
+
+
+
+## Build Models Neg Bin Reg 2
+```{r buildmodelneg}
+library(MASS)
+#MODEL 1
+model3 <- glm.nb(TARGET~ FixedAcidity+VolatileAcidity+CitricAcid+ResidualSugar+Chlorides+FreeSulfurDioxide+TotalSulfurDioxide+BoundSulfurDioxide+Density+pH+Sulphates+Alcohol+as.factor(LabelAppeal)+as.factor(AcidIndex) + as.factor(STARS)+PerVol,data=train)
+
+summary(model3)
+predmodel3 <- predict(model3, type="response")
+train2$pred3 <- predict(model3, type="response")
+
+table(true = train$TARGET, pred = floor(fitted(model3))) %>% kable() %>% kable_styling()
+
+
+par(mfrow=c(1,2))
+hist(train2$TARGET)
+hist(train2$pred3)
+
+#plots for Model 1
+par(mfrow=c(2,2))
+plot(model3)
+
+#MODEL 2
+
+model4 <- glm.nb(TARGET~ VolatileAcidity+TotalSulfurDioxide+Alcohol+as.factor(LabelAppeal)+as.factor(AcidIndex) + as.factor(STARS)+PerVol,data=train)
+
+summary(model4)
+predmodel4 <- predict(model2, type="response")
+train2$pred4 <- predict(model2, type="response")
+
+table(true = train$TARGET, pred = floor(fitted(model4))) %>% kable() %>% kable_styling()
+
+par(mfrow=c(1,2))
+hist(train2$TARGET)
+hist(train2$pred4)
+
+#plots for Model 1
+par(mfrow=c(2,2))
+plot(model4)
+```
+
+
+## Build Models Linear 2
+```{r buildmodelslinear, include=TRUE}
+
+#MODEL 1
+model5 <- lm(TARGET ~ ., data=train)
+summary(model5)
+
+par(mfrow=c(1,2))
+plot(model5$residuals ~ model5$fitted.values)
+plot(model5$fitted.values,train$TARGET)
+
+par(mfrow=c(2,2))
+plot(model5)
+
+#extract variables that are significant and rerun model
+sigvars <- data.frame(summary(model5)$coef[summary(model5)$coef[,4] <= .05, 4])
+sigvars <- add_rownames(sigvars, "vars")
+colist<-dplyr::pull(sigvars, vars)
+colist <- colist[c(2:14)]
+
+idx <- match(colist, names(train))
+trainmod2 <- cbind(train[,idx], train['TARGET'])
+
+#MODEL 2
+model6<-lm(TARGET ~ ., data=trainmod2)
+
+summary(model6)
+
+
+par(mfrow=c(2,2))
+plot(model6$residuals ~ model6$fitted.values)
+plot(model6$fitted.values,train$TARGET)
+
+
+par(mfrow=c(2,2))
+plot(model6)
+
+par(mfrow=c(1,2))
+plot(model6$residuals ~ model6$fitted.values, main="New Reduced Var Model")
+abline(h = 0)
+plot(model5$residuals ~ model5$fitted.values, main="Orignal Model All Vars")
+abline(h = 0)
+
+
+
+```
+
+
+
+## Select Models
+```{r selectmodels}
+
+
+test = read.csv(file="data/wine-evaluation-data.csv")
+test2<- test
+dim(test)
+
+
+#new variables
+test$BoundSulfurDioxide <- test$TotalSulfurDioxide - test$FreeSulfurDioxide
+
+# impute data for missing values
+# use column mean for calculation
+
+test$STARS[is.na(test$STARS)] <- mean(test$STARS, na.rm=TRUE)
+test$Alcohol[is.na(test$Alcohol)] <- mean(test$Alcohol, na.rm=TRUE)
+test$Sulphates[is.na(test$Sulphates)] <- mean(test$Sulphates, na.rm=TRUE)
+test$pH[is.na(test$pH)] <- mean(test$pH, na.rm=TRUE)
+test$TotalSulfurDioxide[is.na(test$TotalSulfurDioxide)] <- mean(test$TotalSulfurDioxide, na.rm=TRUE)
+test$FreeSulfurDioxide[is.na(test$FreeSulfurDioxide)] <- mean(test$FreeSulfurDioxide, na.rm=TRUE)
+test$BoundSulfurDioxide[is.na(test$BoundSulfurDioxide)] <- mean(test$BoundSulfurDioxide, na.rm=TRUE)
+test$Chlorides[is.na(test$Chlorides)] <- mean(test$Chlorides, na.rm=TRUE)
+test$ResidualSugar[is.na(test$ResidualSugar)] <- mean(test$ResidualSugar, na.rm=TRUE)
+
+#convert to abs for negative values
+#converted to positive based upon literature
+
+test$FixedAcidity <- abs(test$FixedAcidity)
+test$VolatileAcidity <- abs(test$VolatileAcidity)
+test$CitricAcid <- abs(test$CitricAcid)
+test$ResidualSugar <- abs(test$ResidualSugar)
+test$Chlorides <- abs(test$Chlorides)
+test$FreeSulfurDioxide <- abs(test$FreeSulfurDioxide)
+test$TotalSulfurDioxide <- abs(test$TotalSulfurDioxide)
+test$BoundSulfurDioxide <- abs(test$BoundSulfurDioxide)
+test$Sulphates <- abs(test$Sulphates)
+test$Alcohol <- abs(test$Alcohol)
+
+#new variables after abs to avoid nan and inf
+test$PerVol <- test$VolatileAcidity/(test$FixedAcidity+test$VolatileAcidity)
+
+#shift categorigal labelappeal
+test$LabelAppeal <- test$LabelAppeal+2
+
+
+test2<-test
+test2$STARS <- as.factor(test2$STARS)
+
+
+
+test <- test[, !(colnames(test) %in% c("INDEX"))]
+test <- test[, !(colnames(test) %in% c("IN"))]
+
+test$TARGET <- 0
+test$STARS[test$STARS>2 & test$STARS <3] <- 2.04175498092412
+
+
+test$TARGET <- predict(model2, newdata = test, type="response")
+
+y_pred_num <- floor(test$TARGET)
+y_pred <- factor(y_pred_num, levels=c(0, 1,2,3,4,5,6,7,8))
+summary(y_pred)
+
+
+par(mfrow=c(2,2))
+hist(test$TARGET)
+hist(train$TARGET)
+
+```
+

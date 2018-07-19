@@ -1,0 +1,225 @@
+---
+title: "Data 621"
+author: 'Cesar Espitia HW #3'
+date: "7/1/2018"
+output: html_document
+---
+
+## Abstract
+This assignment focused on census type data for the City of Boston.  The dataset contains 466 records that encompass the entire area.  The variables for the data are housing type variables such as number of rooms but the records do not give an indication of the part of the city it is representing.  The purpose for this assignment is to analyze the data, perform any data manipulation / clean-up and build three (3) binary logistic regression models using only the data (or derivatives thereof) to predict if the region is above or below the median crime rate.  The chosen model provided an AIC = 251.59.
+
+###Keywords:  crime, data621
+
+
+
+## Data Exploration
+
+
+```{r dataexploration}
+knitr::opts_chunk$set(echo = TRUE)
+library(e1071)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(corrplot)
+library(FactoMineR)
+library(VIF)
+library(knitr)
+library(kableExtra)
+library(Hmisc)
+library(pROC)
+
+# read data
+train = read.csv(file="data/crime-training-data.csv")
+train2<-train
+dim(train)
+
+#check data
+summary(train) %>% kable() %>% kable_styling()
+sapply(train, function(x) sum(is.na(x)))
+
+ntrain<-select_if(train, is.numeric)
+ntrain %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") +   # In separate panels
+    geom_density()  
+
+rcorr(as.matrix(train))
+corrplot(cor(train), method="square")
+
+# correlation test 1
+cor.test(train$rad,train$tax,method="pearson")
+#significant ignore
+
+
+```
+
+## Data Preparation
+
+```{r datapreparation}
+# transform data using log for skewed
+
+train$zn <- log(train$zn+1)
+train$black <- log(train$black+1)
+train$chas <- log(train$chas+1)
+
+
+#remove rad per correlation in prior section
+
+train <- train[, !(colnames(train) %in% c("rad"))]
+
+#create variable
+train$new <- train$tax / (train$medv*10)
+
+rcorr(as.matrix(train))
+corrplot(cor(train), method="square")
+
+```
+
+
+
+
+## Build Models
+```{r buildmodels}
+
+#MODEL 1
+logit <- glm(target ~ ., data=train, family = "binomial" (link="logit"))
+summary(logit)
+exp(logit$coefficients)
+logitscalar <- mean(dlogis(predict(logit, type = "link")))
+logitscalar * coef(logit)
+
+confint.default(logit)
+
+predlogit <- predict(logit, type="response")
+train2$pred1 <- predict(logit, type="response")
+summary(predlogit)
+
+table(true = train$target, pred = round(fitted(logit)))
+
+#plots for Model 1
+ggplot(data = train, aes(x = age, y = target)) + 
+    geom_point(color = 'grey50') + 
+    geom_point(data = train2, aes(x = age, y = pred1), color = 'red', size = 0.3) + 
+    theme_bw()
+
+data.frame(train2$pred1) %>%
+    ggplot(aes(x = train2.pred1)) + 
+    geom_histogram(bins = 50, fill = 'grey50') +
+    labs(title = 'Histogram of Predictions') +
+    theme_bw()
+
+plot.roc(train$target, train2$pred1)
+
+#extract variables that are significant and rerun model
+sigvars <- data.frame(summary(logit)$coef[summary(logit)$coef[,4] <= .05, 4])
+sigvars <- add_rownames(sigvars, "vars")
+colist<-dplyr::pull(sigvars, vars)
+colist<-colist[2:11]
+
+idx <- match(colist, names(train))
+trainmod2 <- cbind(train[,idx], train2['target'])
+
+#MODEL 2
+logit2 <- glm(target ~ ., data=trainmod2, family = "binomial" (link="logit"))
+summary(logit2)
+exp(logit2$coefficients)
+logit2scalar <- mean(dlogis(predict(logit2, type = "link")))
+logit2scalar * coef(logit2)
+
+predlogit2 <- predict(logit2, type="response")
+train2$pred2 <- predict(logit2, type="response")
+
+summary(predlogit2)
+
+table(true = train$target, pred = round(fitted(logit2)))
+
+#plots for Model 2
+ggplot(data = train, aes(x = age, y = target)) + 
+    geom_point(color = 'grey50') + 
+    geom_point(data = train2, aes(x = age, y = pred2), color = 'red', size = 0.3) + 
+    theme_bw()
+
+data.frame(train2$pred2) %>%
+    ggplot(aes(x = train2.pred2)) + 
+    geom_histogram(bins = 50, fill = 'grey50') +
+    labs(title = 'Histogram of Predictions') +
+    theme_bw()
+
+plot.roc(train$target, train2$pred2)
+
+#MODEL 3
+#PC Model no racial bias
+logit3<-model <- glm(target ~ zn + indus + nox + rm + age + dis + tax + ptratio + medv + new, data=train, family = "binomial" (link="logit"))
+summary(logit3)
+exp(logit3$coefficients)
+
+predlogit3 <- predict(logit3, type="response")
+train2$pred3 <- predict(logit3, type="response")
+summary(predlogit3)
+
+table(true = train$target, pred = round(fitted(logit3)))
+
+#plots for Model 2
+ggplot(data = train, aes(x = age, y = target)) + 
+    geom_point(color = 'grey50') + 
+    geom_point(data = train2, aes(x = age, y = pred3), color = 'red', size = 0.3) + 
+    theme_bw()
+
+data.frame(train2$pred3) %>%
+    ggplot(aes(x = train2.pred3)) + 
+    geom_histogram(bins = 50, fill = 'grey50') +
+    labs(title = 'Histogram of Predictions') +
+    theme_bw()
+
+plot.roc(train$target, train2$pred3)
+
+logit3scalar <- mean(dlogis(predict(logit3, type = "link")))
+logit3scalar * coef(logit3)
+
+round(logitscalar * coef(logit),2)
+round(logit2scalar * coef(logit2),2)
+round(logit3scalar * coef(logit3),2)
+```
+
+
+## Select Models
+```{r selectmodels}
+
+
+test = read.csv(file="data/crime-evaluation-data.csv")
+test2<- test
+dim(test)
+
+# transform data using log for skewed
+
+test$zn <- log(test$zn+1)
+test$black <- log(test$black+1)
+test$chas <- log(test$chas+1)
+
+
+#remove rad per correlation in prior section
+
+test <- test[, !(colnames(test) %in% c("rad"))]
+
+#create variable
+test$new <- test$tax / (test$medv*10)
+
+idx <- match(colist, names(test))
+testNorm2 <- test[,idx]
+
+summary(testNorm2)
+
+modelfinal <- predict(logit2, newdata = testNorm2, type="response")
+
+y_pred_num <- ifelse(modelfinal > 0.5, 1, 0)
+y_pred <- factor(y_pred_num, levels=c(0, 1))
+summary(y_pred)
+
+rbind(round(summary(predlogit2),4), round(summary(modelfinal),4)) %>% kable()
+
+```
+

@@ -1,0 +1,179 @@
+---
+title: "Data 621"
+author: 'Cesar Espitia HW #1'
+date: "6/5/2018"
+output: html_document
+---
+
+## Data Exploration
+
+
+```{r dataexploration, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(e1071)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(corrplot)
+library(FactoMineR)
+library(VIF)
+library(knitr)
+library(kableExtra)
+library(Hmisc)
+
+# read data
+train = read.csv(file="data/moneyball-training-data.csv")
+train2<-train
+
+#check data
+summary(train) %>% kable() %>% kable_styling()
+sapply(train, function(x) sum(is.na(x)))
+
+ntrain<-select_if(train, is.numeric)
+ntrain %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") +   # In separate panels
+    geom_density()  
+
+rcorr(as.matrix(train))
+corrplot(cor(train), method="square")
+
+# correlation test 1
+cor.test(train$TEAM_BATTING_3B,train$TEAM_BATTING_SO,method="pearson")
+#significant ignore
+
+# correlation test 2
+cor.test(train$TEAM_BATTING_HR,train$TEAM_PITCHING_HR,method="pearson")
+#significant ignore
+
+
+```
+
+## Data Preparation
+
+```{r datapreparation, include=FALSE}
+# impute data for missing values
+# use column mean for calculation
+
+for(i in 1:ncol(train)){
+  train[is.na(train[,i]), i] <- mean(train[,i], na.rm = TRUE)
+}
+
+#create THREE new variables Strikeout, Walks, 
+train$TEAM_BP_SO <- train$TEAM_BATTING_SO / train$TEAM_PITCHING_SO
+train$TEAM_BP_BB <- train$TEAM_BATTING_BB / train$TEAM_PITCHING_BB
+train$TEAM_BP_1B <- train$TEAM_BATTING_H-train$TEAM_BATTING_2B-train$TEAM_BATTING_3B-train$TEAM_BATTING_HR
+
+#remove index, team_batting_3b and team
+
+train <- train[, !(colnames(train) %in% c("INDEX","TEAM_BATTING_3B","TEAM_BATTING_HR"))]
+
+
+train[train$TARGET_WINS==0,] <- NA
+train <- train[complete.cases(train),]
+
+# correlation
+corrplot(cor(train), method="square")
+
+trainNorm <-as.data.frame(scale(train))
+summary(trainNorm)
+
+```
+
+
+
+
+## Build Models
+```{r buildmodels, include=FALSE}
+
+#MODEL 1
+model <- lm(TARGET_WINS ~ ., data=trainNorm)
+summary(model)
+
+plot(model$residuals ~ model$fitted.values)
+plot(model$fitted.values,trainNorm$TARGET_WINS)
+
+#extract variables that are significant and rerun model
+sigvars <- data.frame(summary(model)$coef[summary(model)$coef[,4] <= .05, 4])
+sigvars <- add_rownames(sigvars, "vars")
+colist<-dplyr::pull(sigvars, vars)
+
+idx <- match(colist, names(train))
+trainmod2 <- cbind(train[,idx], trainNorm['TARGET_WINS'])
+
+#MODEL 2
+model2<-lm(TARGET_WINS ~ ., data=trainmod2)
+
+summary(model2)
+plot(model2$residuals ~ model2$fitted.values)
+plot(model2$fitted.values,trainNorm$TARGET_WINS)
+
+
+par(mfrow=c(2,2))
+plot(model2)
+
+par(mfrow=c(1,2))
+plot(model2$residuals ~ model2$fitted.values, main="New Reduced Var Model")
+abline(h = 0)
+plot(model$residuals ~ model$fitted.values, main="Orignal Model All Vars")
+abline(h = 0)
+
+#MODEL 3
+#remove variables with opposite coefficients
+dim(trainmod2)
+trainNorm2 <- trainmod2[, !(colnames(trainmod2) %in% c("TEAM_BATTING_2B","TEAM_FIELDING_DP"))]
+dim(trainNorm2)
+
+
+model3<-lm(TARGET_WINS ~ ., data=trainNorm2)
+summary(model3)
+
+plot(model2$residuals ~ model3$fitted.values)
+plot(model3$fitted.values,trainNorm2$TARGET_WINS)
+
+par(mfrow=c(2,2))
+plot(model3)
+
+```
+
+
+## Select Models
+```{r selectmodels, include=FALSE}
+
+cor(trainmod2)
+cor(trainNorm2)
+dim(trainmod2)
+dim(test)
+
+test = read.csv(file="data/moneyball-training-data.csv")
+#create THREE new variables Strikeout, Walks, 
+test <- test[(test$TEAM_PITCHING_H <= 3456),]
+
+
+for(i in 1:ncol(test)){
+  test[is.na(test[,i]), i] <- mean(test[,i], na.rm = TRUE)
+}
+test$TEAM_BP_SO <- test$TEAM_BATTING_SO / test$TEAM_PITCHING_SO
+test$TEAM_BP_BB <- test$TEAM_BATTING_BB / test$TEAM_PITCHING_BB
+test$TEAM_BP_1B <- test$TEAM_BATTING_H-test$TEAM_BATTING_2B-test$TEAM_BATTING_3B-test$TEAM_BATTING_HR
+test <- test[complete.cases(test),]
+
+testNorm <-as.data.frame(scale(test))
+
+idx <- match(colist, names(testNorm))
+testNorm2 <- cbind(testNorm[,idx], testNorm['TARGET_WINS'])
+
+summary(testNorm2)
+
+modelfinal<- predict(model2, newdata = testNorm2, interval='confidence') #data from scaling originally to get to actual wins
+summary(modelfinal)
+
+summary(trainmod2)
+
+
+
+```
+

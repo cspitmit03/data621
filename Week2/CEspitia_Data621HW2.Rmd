@@ -1,0 +1,222 @@
+---
+title: "Data 621"
+author: 'Cesar Espitia HW #2'
+date: "6/24/2018"
+output: html_document
+---
+
+## Overview
+
+In this homework assignment, you will work through various classification metrics. You will be asked to create functions in R to carry out the various calculations. You will also investigate some functions in packages that will let you obtain the equivalent results. Finally, you will create graphical output that also can be used to evaluate the output of classification models, such as binary logistic regression.
+
+## Question 1
+
+These are setup steps.
+
+
+```{r Q1, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(zoo)
+```
+
+## Question 2
+
+Show the confusion matrix.
+
+
+```{r Q2, include=TRUE}
+# read data
+origdata = read.csv(file="data/classification-output-data.csv")
+data = subset(origdata, select = c(scored.class, class))
+
+CM = table(data$scored.class, data$class)
+print(CM)
+```
+
+## Question 3
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the accuracy of the predictions.
+
+```{r Q3, include=TRUE}
+
+TP = CM[1,1]
+TN = CM[2,2]
+FP = CM[2,1]
+FN = CM[1,2]
+
+con.accuracy <- function(x) {
+  CM = table(x$scored.class, x$class)
+  
+  (TP + TN)/sum(CM)
+}
+
+con.accuracy(data)
+
+```
+
+
+## Question 4
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the classification error rate of the predictions.
+
+```{r Q4, include=TRUE}
+
+con.CER <- function(x) {
+  CM = table(x$class, x$scored.class)
+  
+  (FP + FN)/sum(CM)
+}
+
+con.CER(data)
+
+con.accuracy(data) + con.CER(data) == 1
+```
+
+## Question 5
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the precision of the predictions.
+
+```{r Q5, include=TRUE}
+con.prec <- function(x) {
+  CM = table(x$class, x$scored.class)
+  
+  TP / (TP + FP)
+}
+
+con.prec(data)
+
+```
+
+
+## Question 6
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the sensitivity of the predictions. Sensitivity is also known as recall.
+
+```{r Q6, include=TRUE}
+
+con.sens <- function(x, threshold = 0.5) {
+  TP <- sum(x[, 1] > threshold & x[, 2] == 1)
+  FN <- sum(x[, 1] <= threshold & x[, 2] == 1)
+  TP/(TP + FN)
+}
+
+con.sens(data)
+
+```
+
+
+## Question 7
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the specificity of the predictions.
+
+```{r Q7, include=TRUE}
+
+con.spec <- function(x, threshold = 0.5) {
+  TN <- sum(x[, 1] <= threshold & x[, 2] == 0)
+  FP <- sum(x[, 1] > threshold & x[, 2] == 0)
+  TN/(TN + FP)
+}
+
+con.spec(data)
+
+```
+
+
+## Question 8
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the F1 score of the predictions.
+
+```{r Q8, include=TRUE}
+
+con.F1 <- function(x, threshold = 0.5) {
+  CM = table(x$class, x$scored.class)
+  
+  (2*con.prec(x)*con.sens(x)) / (con.prec(x) + con.sens(x))
+}
+
+con.F1(data)
+
+```
+
+## Question 9
+Before we move on, let’s consider a question that was asked: What are the bounds on the F1 score? Show that the F1 score will always be between 0 and 1. (Hint: If 0 < 𝑎 < 1 and 0 < 𝑏 < 1 then 𝑎𝑏 < 𝑎.)
+
+### Answer
+The bounds can be done with simple logic.  If the class and scored class are perfect (equal to each other) then FP and FN would be 0 and Prec and Sens each would be 1.  This means that the max would be $(2*1*1) / 2 = 1$
+
+If the model doesn't predict anything meaning that TP reaches 0 then the min is 0.
+
+
+## Question 10
+
+Write a function that generates an ROC curve from a data set with a true classification column (class in our example) and a probability column (scored.probability in our example). Your function should return a list that includes the plot of the ROC curve and a vector that contains the calculated area under the curve (AUC). Note that I recommend using a sequence of thresholds ranging from 0 to 1 at 0.01 intervals.
+
+The data uses the functions for specificity and sensitivity prebuilt in the prior sections.  These two functions are the only ones where the thereshold is important to calculate these values, the others are based upon the confusion matrix.  
+
+The data for the AUC calculation came from searches in slack overflow to understand the 
+
+
+```{r Q10, include=TRUE}
+
+data_SPC <- subset(origdata, select = c(scored.probability, class))
+
+myROC <- function(df, intervals = 0.01){
+  thresholds <- seq(0, 1, by = intervals)
+  
+  sensitivity <- sort(sapply(thresholds, function(x) con.sens(df, threshold = x)))
+  one_minus_specificity <- sort(1 - sapply(thresholds, function(x) con.spec(df, threshold = x)))
+  
+  #create plot
+  plot(sensitivity ~ one_minus_specificity, type = "s", xlim=c(0, 1), ylim=c(0, 1), main = "My Function")
+  abline(a = 0, b = 1)
+  
+    
+  sum(diff(one_minus_specificity) * rollmean(sensitivity, 2)) #AUC https://stackoverflow.com/questions/4954507/calculate-the-area-under-a-curve
+}
+
+myROC(data_SPC)
+
+```
+
+## Question 11
+
+Use your created R functions and the provided classification output data set to produce all of the classification metrics discussed above.
+
+```{r Q11, include=TRUE}
+con.accuracy(data)
+con.CER(data)
+con.prec(data)
+con.sens(data)
+con.spec(data)
+con.F1(data)
+```
+
+
+## Question 12
+
+Investigate the caret package. In particular, consider the functions confusionMatrix, sensitivity, and specificity. Apply the functions to the data set. How do the results compare with your own functions?
+
+```{r Q12, include=TRUE}
+library(caret)
+
+confusionMatrix(CM)
+
+con.sens(data)
+con.spec(data)
+
+```
+
+The data matches together.
+
+## Question 13
+
+Investigate the pROC package. Use it to generate an ROC curve for the data set. How do the results compare with your own functions?
+
+The AUC under pROC is 0.8212 and the calculated one is 0.84 which is close.  Obviously the curves are more clean in the pROC package as they aren't built using the stepwise intervals to calculated the data for the curve.
+
+```{r Q13, include=TRUE}
+library(pROC)
+roc(origdata$scored.class, origdata$class)
+
+plot.roc(origdata$scored.class, origdata$class)
+
+```
+
+
